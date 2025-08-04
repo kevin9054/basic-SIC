@@ -111,21 +111,13 @@ HashTable100 strTbl;            // Table7 – strings (in quotes)
 //  Opcode table for pass‑2 code generation
 // ───────────────────────────────────────────────────────────────
 static const unordered_map<string, int> OPCODE = {
-    {"ADD", 0x18},   {"ADDF", 0x58}, {"ADDR", 0x90}, {"AND", 0x40},
-    {"CLEAR", 0xB4}, {"COMP", 0x28}, {"COMPF", 0x88}, {"COMPR", 0xA0},
-    {"DIV", 0x24},   {"DIVF", 0x64}, {"DIVR", 0x9C}, {"FIX", 0xC4},
-    {"FLOAT", 0xC0}, {"HIO", 0xF4},  {"J", 0x3C},    {"JEQ", 0x30},
-    {"JGT", 0x34},   {"JLT", 0x38},  {"JSUB", 0x48}, {"LDA", 0x00},
-    {"LDB", 0x68},   {"LDCH", 0x50}, {"LDF", 0x70}, {"LDL", 0x08},
-    {"LDS", 0x6C},   {"LDT", 0x74},  {"LDX", 0x04}, {"LPS", 0xD0},
-    {"MUL", 0x20},   {"MULF", 0x60}, {"MULR", 0x98}, {"NORM", 0xC8},
-    {"OR", 0x44},    {"RD", 0xD8},   {"RMO", 0xAC}, {"RSUB", 0x4C},
-    {"SHIFTL", 0xA4},{"SHIFTR", 0xA8},{"SIO", 0xF0}, {"SSK", 0xEC},
-    {"STA", 0x0C},   {"STB", 0x78},  {"STCH", 0x54}, {"STF", 0x80},
-    {"STI", 0xD4},   {"STL", 0x14},  {"STS", 0x7C}, {"STSW", 0xE8},
-    {"STT", 0x84},   {"STX", 0x10},  {"SUB", 0x1C}, {"SUBF", 0x5C},
-    {"SUBR", 0x94},  {"SVC", 0xB0},  {"TD", 0xE0},  {"TIO", 0xF8},
-    {"TIX", 0x2C},   {"TIXR", 0xB8}, {"WD", 0xDC}
+    {"ADD", 0x18},   {"AND", 0x40},  {"COMP", 0x28}, {"DIV", 0x24},
+    {"J", 0x3C},     {"JEQ", 0x30},  {"JGT", 0x34},  {"JLT", 0x38},
+    {"JSUB", 0x48},  {"LDA", 0x00},  {"LDCH", 0x50}, {"LDL", 0x08},
+    {"LDX", 0x04},   {"MUL", 0x20},  {"OR", 0x44},  {"RD", 0xD8},
+    {"RSUB", 0x4C},  {"STA", 0x0C},  {"STCH", 0x54}, {"STL", 0x14},
+    {"STSW", 0xE8},  {"STX", 0x10},  {"SUB", 0x1C}, {"TD", 0xE0},
+    {"TIX", 0x2C},   {"WD", 0xDC}
 };
 
 // ───────────────────────────────────────────────────────────────
@@ -223,7 +215,9 @@ vector<LineRec> pass1(const vector<string> &raw, const vector<vector<Token>> &to
         if (rec.opcode == "START") {
             locctr = stoi(rec.operand, nullptr, 16);
             rec.loc = locctr;
-            if (!rec.label.empty())
+            if (locctr > 0x7FFF)
+                errors.push_back("Address exceeds 0x7FFF at line " + to_string(rec.lineNo));
+            if (!rec.label.empty() && locctr <= 0x7FFF)
                 symtab[rec.label] = locctr;
             lines.push_back(rec);
             started = true;
@@ -240,8 +234,14 @@ vector<LineRec> pass1(const vector<string> &raw, const vector<vector<Token>> &to
             locctr = 0; // default start
 
         rec.loc = locctr;
-        if (!rec.label.empty())
-            symtab[rec.label] = locctr;
+        if (locctr > 0x7FFF)
+            errors.push_back("LOCCTR exceeds 0x7FFF at line " + to_string(rec.lineNo));
+        if (!rec.label.empty()) {
+            if (locctr > 0x7FFF)
+                errors.push_back("Symbol '" + rec.label + "' address exceeds 0x7FFF at line " + to_string(rec.lineNo));
+            else
+                symtab[rec.label] = locctr;
+        }
 
         int inc = 0;
         if (OPCODE.count(rec.opcode))
@@ -262,7 +262,10 @@ vector<LineRec> pass1(const vector<string> &raw, const vector<vector<Token>> &to
             errors.push_back("Syntax error on line " + to_string(rec.lineNo) + ": unknown opcode '" + rec.opcode + "'");
         }
 
+        int prevLoc = locctr;
         locctr += inc;
+        if (prevLoc <= 0x7FFF && locctr > 0x7FFF)
+            errors.push_back("LOCCTR exceeds 0x7FFF at line " + to_string(rec.lineNo));
         lines.push_back(rec);
     }
 
@@ -304,8 +307,10 @@ void pass2(vector<LineRec> &lines, const map<string, int> &symtab, vector<string
         }
 
         auto it = OPCODE.find(rec.opcode);
-        if (it == OPCODE.end())
-            continue; // unknown mnemonic
+        if (it == OPCODE.end()) {
+            errors.push_back("Invalid opcode '" + rec.opcode + "' at line " + to_string(rec.lineNo));
+            continue;
+        }
 
         int op = it->second;
         string operand = rec.operand;
@@ -327,6 +332,10 @@ void pass2(vector<LineRec> &lines, const map<string, int> &symtab, vector<string
             }
             else {
                 errors.push_back("Undefined symbol: '" + operand + "' at line " + to_string(rec.lineNo));
+                continue;
+            }
+            if (addr > 0x7FFF) {
+                errors.push_back("Address out of range for operand '" + operand + "' at line " + to_string(rec.lineNo));
                 continue;
             }
         }
